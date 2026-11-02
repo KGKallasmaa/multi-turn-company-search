@@ -196,6 +196,7 @@ confidence interval.
 | Perplexity   | Search (`search_context_size` low on search-only, high on search + fetch) |
 | Seltz        | Companies                                                                 |
 | Google SERP  | RapidAPI                                                                  |
+| Keenable     | Pro, Realtime; native Fetch (indexed, live retry); results pending        |
 | Tavily       | Basic, Advanced                                                           |
 | TinyFish     | Search                                                                    |
 | You          | Highlights; highlights + `knowledge=core`; native Contents fetch          |
@@ -305,6 +306,18 @@ policy. Costs use returned credit usage at the Developer top-up rate of $2.20
 per 1,000 credits, verified 2026-10-20, excluding the subscription. Highlights
 search (10 results) uses two credits; standard Markdown fetch uses one. Missing usage
 stays unknown. Leaderboard results are pending.
+
+Keenable is available with `--vendors keenable_pro,keenable_realtime` in both
+research modes; both arms share `KEENABLE_API_KEY` (rate limit: 10 requests/second
+per organization). Search calls `POST /v1/search` with `mode=pro` or
+`mode=realtime`, 10 results, and `snippet_max_length=4000`, matching the shared
+snippet cap; the snippet is the evidence text, with the description as a fallback.
+Native fetch calls `GET /v1/fetch` with `live=false` under the shared page cap and
+retries once with `live=true` on HTTP 404/422 or empty content; both attempts are
+recorded. Costs use the list price of $4 per 1,000 requests ($0.004 per search or
+fetch, keenable.ai/pricing, checked 2026-11-02), scaled by returned
+`usage.credits` when present; fetch cost sums the successful attempts. No scored
+run yet; leaderboard results are pending.
 
 A valid input uses the `company-research-dataset-v1` contract:
 

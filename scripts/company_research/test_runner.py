@@ -181,7 +181,7 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(
             set(VENDORS),
             {
-                "context", "nimble_lite", "nimble_standard", "brave", "exa_deep", "exa_instant", "firecrawl", "linkup_fast",
+                "context", "keenable_pro", "keenable_realtime", "nimble_lite", "nimble_standard", "brave", "exa_deep", "exa_instant", "firecrawl", "linkup_fast",
                 "linkup_standard", "parallel_advanced", "parallel_basic",
                 "parallel_fast", "parallel_turbo", "seltz_companies", "serp",
                 "tavily_advanced", "tavily_basic", "you_highlights", "you_highlights_core", "tinyfish", "perplexity",
@@ -189,7 +189,7 @@ class RunnerTest(unittest.TestCase):
         )
         capabilities = {row["vendor"]: row for row in capability_inventory()}
         for key in (
-            "context", "exa_deep", "exa_instant", "firecrawl", "linkup_fast",
+            "context", "keenable_pro", "keenable_realtime", "exa_deep", "exa_instant", "firecrawl", "linkup_fast",
             "linkup_standard", "parallel_advanced", "parallel_basic",
             "parallel_fast", "parallel_turbo", "tavily_advanced", "tavily_basic", "you_highlights", "you_highlights_core", "tinyfish",
         ):
@@ -228,6 +228,8 @@ class RunnerTest(unittest.TestCase):
         fixtures["you_highlights_core"] = fixtures["you_highlights"]
         fixtures["nimble_lite"] = {"results": [{"url": "https://a.test", "title": "A", "description": "one"}]}
         fixtures["nimble_standard"] = fixtures["nimble_lite"]
+        fixtures["keenable_pro"] = {"results": [{"url": "https://a.test", "title": "A", "description": "", "snippet": "one"}]}
+        fixtures["keenable_realtime"] = fixtures["keenable_pro"]
         self.assertEqual(set(fixtures), set(VENDORS))
         for vendor, payload in fixtures.items():
             with self.subTest(vendor=vendor):

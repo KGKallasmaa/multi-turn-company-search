@@ -67,6 +67,11 @@ class VendorCall:
 
 
 CONTEXT_USD_PER_CREDIT = 0.0022
+# $4 / 1,000 requests for search and fetch, checked 2026-11-02 (https://keenable.ai/pricing).
+KEENABLE_USD_PER_REQUEST = 0.004
+KEENABLE_SEARCH_URL = "https://api.keenable.ai/v1/search"
+KEENABLE_FETCH_URL = "https://api.keenable.ai/v1/fetch"
+KEENABLE_LIVE_RETRY_STATUS = {404, 422}
 
 
 VENDORS: dict[str, VendorSpec] = {
@@ -190,6 +195,15 @@ for _core in (False, True):
         "POST /v1/contents", "you_contents",
         {"count": 10, "extraction": {"extraction_mode": "highlights"},
          **({"knowledge": "core"} if _core else {})}, fetch_unit_cost_usd=0.001,
+    )
+
+for _mode in ("pro", "realtime"):
+    _key = f"keenable_{_mode}"
+    VENDORS[_key] = VendorSpec(
+        _key, f"keenable-{_mode}", f"Keenable {_mode}", f"keenable-{_mode}",
+        f"POST /v1/search mode={_mode}", ("KEENABLE_API_KEY",), KEENABLE_USD_PER_REQUEST, True,
+        "GET /v1/fetch live=false, live=true retry", "keenable_fetch",
+        {"mode": _mode, "snippet_max_length": 4000}, fetch_unit_cost_usd=KEENABLE_USD_PER_REQUEST,
     )
 
 DEFAULT_VENDOR_KEYS = tuple(VENDORS)
@@ -318,6 +332,18 @@ def _dedupe(hits: list[dict[str, Any]], max_results: int) -> list[dict[str, Any]
     return output
 
 
+def _keenable_cost(payload: Any) -> float:
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    credits = usage.get("credits") if isinstance(usage, dict) else None
+    if isinstance(credits, (int, float)) and not isinstance(credits, bool) and credits >= 0:
+        return credits * KEENABLE_USD_PER_REQUEST
+    return KEENABLE_USD_PER_REQUEST
+
+
+def _keenable_headers() -> dict[str, str]:
+    return {"X-API-Key": os.environ["KEENABLE_API_KEY"], "Content-Type": "application/json"}
+
+
 def _reported_dollar_cost(payload: Any) -> float | None:
     if not isinstance(payload, dict):
         return None
@@ -364,6 +390,12 @@ def _parse_hits(vendor_key: str, payload: Any, max_results: int) -> list[dict[st
             parts = highlights.get("highlights") or []
             snippet = "\n".join(part for part in parts if isinstance(part, str)) if highlights.get("code") == "SUCCESS" else ""
             hits.append(_hit(item.get("url"), item.get("title"), snippet.strip() or item.get("description")))
+    elif vendor_key.startswith("keenable_"):
+        for item in payload.get("results") or []:
+            hits.append(_hit(
+                item.get("url"), item.get("title"), item.get("snippet") or item.get("description"),
+                {"published_at": item.get("published_at")},
+            ))
     elif vendor_key.startswith("parallel_"):
         for item in payload.get("results") or []:
             excerpts = item.get("excerpts") or []
@@ -432,6 +464,11 @@ def search(
             method="POST", url="https://api.context.dev/v1/web/search",
             headers={"Authorization": f"Bearer {os.environ['CONTEXT_API_KEY']}", "Content-Type": "application/json"},
             body={**spec.request_config, "query": query, "numResults": max(10, min(max_results, 100))},
+        )
+    elif vendor_key.startswith("keenable_"):
+        call = _request(
+            method="POST", url=KEENABLE_SEARCH_URL, headers=_keenable_headers(),
+            body={**spec.request_config, "query": query, "max_results": max(1, min(max_results, 50))},
         )
     elif vendor_key.startswith("nimble_"):
         call = _request(
@@ -545,6 +582,8 @@ def search(
         payload = call.raw_response if isinstance(call.raw_response, dict) else {}
         credits = (payload.get("key_metadata") or {}).get("credits_consumed")
         call.cost_usd = credits * CONTEXT_USD_PER_CREDIT if isinstance(credits, (int, float)) else None
+    if vendor_key.startswith("keenable_") and call.status == "ok":
+        call.cost_usd = _keenable_cost(call.raw_response)
     call.hits = _parse_hits(vendor_key, call.raw_response, max_results) if call.status == "ok" else []
     return call
 
@@ -571,6 +610,8 @@ def _page(vendor_key: str, url: str, payload: Any, max_chars: int) -> dict[str, 
         metadata = payload.get("metadata") or {}
         text = payload.get("markdown") or ""
         final_url, title = metadata.get("finalUrl") or payload.get("url") or url, metadata.get("title") or ""
+    elif vendor_key.startswith("keenable_"):
+        text, final_url, title = payload.get("content") or "", payload.get("url") or url, payload.get("title") or ""
     elif vendor_key.startswith("parallel_"):
         item = (payload.get("results") or [{}])[0]
         text = item.get("full_content") or "\n".join(item.get("excerpts") or [])
@@ -637,6 +678,8 @@ def fetch(vendor_key: str, url: str, *, objective: str, max_chars: int = 12_000)
             attempts=[], cost_usd=None,
         )
     _assert_public_url(url)
+    if vendor_key.startswith("keenable_"):
+        return _keenable_fetch(vendor_key, url, max_chars)
     if vendor_key == "context":
         call = _request(
             method="GET", url="https://api.context.dev/v1/web/scrape/markdown",
@@ -710,4 +753,28 @@ def fetch(vendor_key: str, url: str, *, objective: str, max_chars: int = 12_000)
         payload = call.raw_response if isinstance(call.raw_response, dict) else {}
         credits = (payload.get("key_metadata") or {}).get("credits_consumed")
         call.cost_usd = credits * CONTEXT_USD_PER_CREDIT if isinstance(credits, (int, float)) else None
+    return call
+
+
+def _keenable_fetch(vendor_key: str, url: str, max_chars: int) -> VendorCall:
+    """Indexed fetch first; retry once with live=true on 404/422 or empty content."""
+    attempts: list[dict[str, Any]] = []
+    latency_ms, cost = 0, 0.0
+    for live in (False, True):
+        call = _request(
+            method="GET", url=KEENABLE_FETCH_URL, headers=_keenable_headers(),
+            params={"url": url, "max_chars": max_chars, "live": "true" if live else "false"},
+        )
+        attempts.extend({**attempt, "live": live} for attempt in call.attempts)
+        latency_ms += call.latency_ms
+        retry = bool(call.attempts) and call.attempts[-1].get("status_code") in KEENABLE_LIVE_RETRY_STATUS
+        if call.status == "ok":
+            cost += _keenable_cost(call.raw_response)
+            try:
+                call.page = _page(vendor_key, url, call.raw_response, max_chars)
+            except Exception as exc:  # noqa: BLE001
+                call.status, call.error, retry = "error", f"{type(exc).__name__}: {exc}", True
+        if call.status == "ok" or not retry:
+            break
+    call.attempts, call.latency_ms, call.cost_usd = attempts, latency_ms, cost
     return call
