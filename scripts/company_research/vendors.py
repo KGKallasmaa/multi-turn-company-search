@@ -760,4 +760,3 @@ def fetch(vendor_key: str, url: str, *, objective: str, max_chars: int = 12_000)
     if vendor_key == "keenable" and call.status == "ok":
         call.cost_usd = _keenable_cost(call.raw_response)
     return call
-
