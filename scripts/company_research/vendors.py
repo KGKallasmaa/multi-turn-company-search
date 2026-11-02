@@ -391,7 +391,10 @@ def _parse_hits(vendor_key: str, payload: Any, max_results: int) -> list[dict[st
             snippet = "\n".join(part for part in parts if isinstance(part, str)) if highlights.get("code") == "SUCCESS" else ""
             hits.append(_hit(item.get("url"), item.get("title"), snippet.strip() or item.get("description")))
     elif vendor_key.startswith("keenable_"):
-        for item in payload.get("results") or []:
+        results = payload.get("results")
+        for item in results if isinstance(results, list) else []:
+            if not isinstance(item, dict):
+                continue
             hits.append(_hit(
                 item.get("url"), item.get("title"), item.get("snippet") or item.get("description"),
                 {"published_at": item.get("published_at")},

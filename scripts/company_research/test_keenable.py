@@ -51,6 +51,10 @@ class KeenableSearch(unittest.TestCase):
                 self.assertEqual(vendors._parse_hits(arm, None, 10), [])
                 self.assertEqual(vendors._parse_hits(arm, {}, 10), [])
                 self.assertEqual(vendors._parse_hits(arm, {"results": None}, 10), [])
+                self.assertEqual(vendors._parse_hits(arm, {"results": {"url": "https://a.test"}}, 10), [])
+                odd = vendors._parse_hits(arm, {"results": [None, "x", 3, {"url": "https://c.test", "snippet": "ok"}]}, 10)
+                self.assertEqual([hit["url"] for hit in odd], ["https://c.test"])
+                self.assertEqual(hits[0]["metadata"], {"published_at": 1730505600})
 
     def test_search_cost(self):
         cases = (
